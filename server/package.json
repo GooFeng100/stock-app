@@ -1,0 +1,14 @@
+{
+  "name": "stock-tracker-api",
+  "version": "1.0.0",
+  "description": "T+0 Trading Desk Backend",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "mongoose": "^8.3.2"
+  }
+}

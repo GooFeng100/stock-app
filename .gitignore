@@ -1,0 +1,9 @@
+node_modules/
+server/node_modules/
+html/node_modules/
+server/package-lock.json
+
+mongodb/
+.env
+*.log
+.DS_Store

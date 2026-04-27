@@ -1,0 +1,1945 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="zh-CN">
+
+<head>
+    <meta charset="utf-8" />
+    <meta content="width=device-width, initial-scale=1.0" name="viewport" />
+    <title>T+0 Trading Desk</title>
+    <!-- Google Fonts & Material Symbols -->
+    <link href="https://fonts.googleapis.com" rel="preconnect" />
+    <link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect" />
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Space+Grotesk:wght@500;700&amp;display=swap"
+        rel="stylesheet" />
+    <link
+        href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap"
+        rel="stylesheet" />
+    <!-- Design System Configuration -->
+    <link href="output.css" rel="stylesheet">
+    <style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+
+        .scrim {
+            background-color: rgba(5, 20, 36, 0.6);
+            backdrop-filter: blur(4px);
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        /* 原始行快速淡出，由 Canvas 接管爆炸效果 */
+        .row-exploding {
+            opacity: 0 !important;
+            pointer-events: none;
+            transition: opacity 0.1s;
+        }
+
+        /* 自定义滚动条 – 应用于明细列表容器 */
+        #detail-rows-container::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        #detail-rows-container::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        #detail-rows-container::-webkit-scrollbar-thumb {
+            background-color: rgba(148, 163, 184, 0.2);
+            border-radius: 3px;
+            transition: background-color 0.2s;
+        }
+
+        #detail-rows-container:hover::-webkit-scrollbar-thumb {
+            background-color: rgba(148, 163, 184, 0.5);
+        }
+
+        /* Firefox 优化 */
+        #detail-rows-container {
+            scrollbar-width: thin;
+            scrollbar-color: rgba(148, 163, 184, 0.2) transparent;
+        }
+
+
+
+        /* 粒子画布层：确保在所有元素之上 */
+        #explosion-canvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 9999;
+        }
+
+        @keyframes explode-shred {
+            0% {
+                opacity: 1;
+                transform: translate(0, 0) scale(1);
+                filter: blur(0);
+            }
+
+            20% {
+                /* 爆炸前的瞬间蓄力/闪光感 */
+                opacity: 1;
+                transform: translate(0, 0) scale(1.05);
+                filter: blur(1px);
+                box-shadow: 0 0 30px rgba(74, 225, 118, 0.6);
+            }
+
+            100% {
+                /* 向随机分配的四周扩散位移 */
+                opacity: 0;
+                /* scale 维持在 0.5-0.8 之间，防止过快缩小产生“向内缩”的错觉 */
+                transform: translate(var(--explode-x), var(--explode-y)) scale(0.7) rotate(15deg);
+                filter: blur(20px);
+            }
+        }
+
+        .record-table tbody tr {
+            transition: transform 0.5s ease-out;
+        }
+
+        /* 录入弹窗动画 */
+        #modal-new-transaction>div:not(.scrim) {
+            /* 动画由 JS 动态控制，此处保留基础属性，不设置固定过渡以避免冲突 */
+            transform-origin: center;
+            will-change: transform, opacity;
+            opacity: 1;
+        }
+
+        #modal-new-transaction.hidden>div:not(.scrim) {
+            transition: transform 0.2s ease-in, opacity 0.15s ease-in;
+        }
+
+        /* 明细弹窗表格容器：独立滚动区域，始终留出标题和底部空间 */
+        .detail-table-container {
+            max-height: calc(90vh - 160px);
+            /* 160px = 标题区 + 底部按钮 + 内边距 */
+            overflow-y: auto !important;
+            flex: 1 1 auto;
+            min-height: 0;
+        }
+
+        /* 确保表头在容器内固定 */
+        #detail-rows-container thead {
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            background-color: #1C222D;
+            /* 与背景一致，防止滚动时透明 */
+        }
+    </style>
+</head>
+
+<body class="bg-background text-on-background min-h-screen flex flex-col font-body-md text-body-md">
+    <!-- TopAppBar -->
+    <header
+        class="flex justify-between items-center px-4 w-full sticky top-0 z-50 docked full-width h-14 bg-[#0B0E14] border-b border-[#2D3748] font-['Inter'] antialiased tracking-tight">
+        <div class="flex items-center bg-surface-container border border-outline-variant rounded-lg p-1">
+            <button
+                class="flex items-center gap-2 px-4 py-1.5 rounded-md transition-all active-tab bg-surface-bright shadow-sm border border-outline-variant/50 text-primary font-semibold"
+                id="btn-console">
+                <span class="material-symbols-outlined text-[20px]">dashboard</span>
+                <span class="text-sm tracking-wide">控制台</span>
+            </button>
+            <button
+                class="flex items-center gap-2 px-4 py-1.5 rounded-md transition-all inactive-tab text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest border border-transparent"
+                id="btn-history">
+                <span class="material-symbols-outlined text-[20px]">history</span>
+                <span class="text-sm tracking-wide">历史清单</span>
+            </button>
+        </div>
+        <div class="text-slate-400 font-label-xs text-label-xs uppercase tracking-widest" id="market-info">当前市场：🇺🇸
+            <span class="text-secondary font-bold mx-1">盘中时段</span> | 美东时间：2026-04-21 14:05:30
+        </div>
+    </header>
+    <!-- Main Content Canvas -->
+    <main class="flex-1 p-margin md:p-container-padding overflow-y-auto relative">
+        <div id="view-console">
+            <!-- Stock Cards Grid -->
+            <div class="flex flex-wrap justify-center gap-margin" id="cards-container"
+                style="max-width: 932px; margin-left: auto; margin-right: auto;">
+                <!-- 卡片将由 JavaScript 动态渲染，加载中显示占位符 -->
+                <div class="w-full text-center py-12 text-on-surface-variant font-data-mono" id="loading-placeholder">
+                    <span class="material-symbols-outlined animate-spin mr-2 align-middle">sync</span> 加载持仓数据...
+                </div>
+            </div>
+
+            <!-- 卡片模板 (隐藏，用于克隆) -->
+            <template id="card-template">
+                <div
+                    class="w-full sm:w-[456px] bg-surface-container rounded-2xl border border-outline-variant flex flex-col overflow-hidden hover:border-primary transition-all duration-300 group relative shadow-md hover:shadow-[0_0_15px_rgba(77,142,255,0.3)]">
+                    <div
+                        class="absolute left-0 top-0 bottom-0 w-[2px] bg-primary opacity-0 group-hover:opacity-100 transition-opacity">
+                    </div>
+                    <div class="p-density-comfy flex flex-col items-center relative pt-6">
+                        <button
+                            class="absolute top-2 right-2 text-outline hover:text-error transition-colors p-1 rounded-full hover:bg-surface-container-highest flex items-center justify-center btn-delete-card">
+                            <span class="material-symbols-outlined text-[20px]"
+                                style='font-variation-settings: "FILL" 1;'>delete</span>
+                        </button>
+                        <div class="flex items-center gap-2">
+                            <h2 class="text-xl font-bold tracking-widest text-on-surface card-symbol">AAPL</h2>
+                        </div>
+                        <div
+                            class="font-display-price text-[40px] leading-tight font-bold text-on-surface mt-1 card-price">
+                            $0.00</div>
+                    </div>
+                    <div class="px-density-comfy pb-density-high grid grid-cols-2 gap-density-comfy">
+                        <div class="flex flex-col items-start">
+                            <span class="font-label-xs text-label-xs text-on-surface-variant uppercase">持仓数量</span>
+                            <span class="font-data-mono text-data-mono text-on-surface card-qty">0</span>
+                        </div>
+                        <div class="flex flex-col items-end text-right">
+                            <span class="font-label-xs text-label-xs text-on-surface-variant uppercase">投资总额</span>
+                            <span class="font-data-mono text-data-mono text-on-surface card-total">$0.00</span>
+                        </div>
+                    </div>
+                    <div class="flex-1 bg-surface-container-low border-t border-surface-container-highest">
+                        <div
+                            class="px-density-comfy py-density-high grid grid-cols-[1.4fr_0.8fr_1fr_1fr_1.2fr_24px] gap-unit border-b border-surface-container-highest font-label-xs text-label-xs text-on-surface-variant uppercase">
+                            <div>时间</div>
+                            <div>方向</div>
+                            <div class="text-right">数量</div>
+                            <div class="text-right">价格</div>
+                            <div class="text-right">金额</div>
+                            <div></div>
+                        </div>
+                        <div class="flex flex-col transaction-rows"></div>
+                    </div>
+                    <!-- 底部操作区：有交易记录时显示买入/卖出，无记录时显示删除卡片 -->
+                    <div class="p-3 bg-surface-container-highest">
+                        <!-- 有交易记录时的按钮组 -->
+                        <div class="card-actions grid grid-cols-2 gap-3">
+                            <button
+                                class="btn-card-buy flex items-center justify-center gap-1 bg-secondary/10 text-secondary border border-secondary/20 hover:bg-secondary/20 hover:border-secondary/40 py-3 rounded-lg font-headline-sm text-headline-sm transition-all active:scale-[0.98] w-full">
+                                <span class="material-symbols-outlined text-[20px]">add</span>买入
+                            </button>
+                            <button
+                                class="btn-card-sell flex items-center justify-center gap-1 bg-error/10 text-error border border-error/20 hover:bg-error/20 hover:border-error/40 py-3 rounded-lg font-headline-sm text-headline-sm transition-all active:scale-[0.98] w-full">
+                                <span class="material-symbols-outlined text-[20px]">remove</span>卖出
+                            </button>
+                        </div>
+                        <!-- 无交易记录时的删除卡片按钮（默认隐藏） -->
+                        <div class="card-delete-action hidden">
+                            <button
+                                class="btn-delete-card-bottom w-full bg-error/10 text-error border border-error/20 hover:bg-error/20 hover:border-error/40 py-3 rounded-lg font-headline-sm text-headline-sm transition-all active:scale-[0.98] flex items-center justify-center gap-2">
+                                <span class="material-symbols-outlined text-[20px]">delete</span>删除卡片
+                            </button>
+                        </div>
+                        <!-- 持仓为零但有历史记录时显示平仓结算 -->
+                        <div class="card-settle-action hidden mt-3">
+                            <button
+                                class="btn-settle-card w-full bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20 hover:border-primary/40 py-3 rounded-lg font-headline-sm text-headline-sm transition-all active:scale-[0.98] flex items-center justify-center gap-2">
+                                <span class="material-symbols-outlined text-[20px]">done_all</span>平仓并结算
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </template>
+            <!-- Floating Action Button (FAB) -->
+            <button aria-label="录入新交易"
+                class="fixed bottom-margin right-margin w-14 h-14 bg-primary text-on-primary rounded-full flex items-center justify-center shadow-[0_10px_30px_rgba(0,0,0,0.5)] hover:bg-primary-container active:scale-95 transition-all z-40 group">
+                <span
+                    class="material-symbols-outlined text-[28px] group-hover:rotate-90 transition-transform duration-300">add</span>
+            </button>
+        </div>
+        <div class="hidden w-full max-w-6xl mx-auto" id="view-history">
+            <div class="bg-surface-container-low border border-outline-variant rounded-xl overflow-hidden shadow-2xl">
+                <div class="overflow-x-auto custom-scrollbar" style="max-height: 560px; overflow-y: auto;">
+                    <table class="w-full border-collapse text-left">
+                        <thead class="sticky top-0 z-10">
+                            <tr class="bg-surface-container-lowest border-b border-outline-variant">
+                                <th class="px-6 py-4 font-label-xs text-outline uppercase tracking-wider text-center">日期
+                                </th>
+                                <th class="px-6 py-4 font-label-xs text-outline uppercase tracking-wider text-center">
+                                    交易ID</th>
+                                <th class="px-6 py-4 font-label-xs text-outline uppercase tracking-wider text-center">
+                                    股票代码</th>
+                                <th class="px-6 py-4 font-label-xs text-outline uppercase tracking-wider text-right">盈亏
+                                </th>
+                                <th class="px-6 py-4 font-label-xs text-outline uppercase tracking-wider text-right ">操作
+                                </th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-outline-variant" id="history-table-body">
+                            <!-- 动态渲染，始终渲染8行 -->
+                        </tbody>
+                    </table>
+                </div>
+                <!-- 分页控件 -->
+                <div
+                    class="bg-surface-container-lowest px-6 py-3 flex justify-between items-center border-t border-outline-variant">
+                    <span class="text-[11px] text-outline uppercase font-bold tracking-widest" id="pagination-info">显示 0
+                        条记录</span>
+                    <div class="flex items-center space-x-4">
+                        <button class="text-outline hover:text-on-surface transition-colors disabled:opacity-30"
+                            id="prev-page-btn" disabled>
+                            <span class="material-symbols-outlined">chevron_left</span>
+                        </button>
+                        <span class="font-data-mono text-xs text-primary" id="page-indicator">第 1 / 0 页</span>
+                        <button class="text-outline hover:text-on-surface transition-colors disabled:opacity-30"
+                            id="next-page-btn" disabled>
+                            <span class="material-symbols-outlined">chevron_right</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+    <!-- 录入新交易模态框（唯一修正版） -->
+    <div class="hidden fixed inset-0 z-[100]" id="modal-new-transaction">
+        <div class="absolute inset-0 flex items-center justify-center p-margin">
+            <div class="absolute inset-0 scrim"></div>
+            <div
+                class="bg-[#1C222D] border border-outline-variant rounded shadow-[0px_10px_30px_rgba(0,0,0,0.5)] overflow-hidden flex flex-col w-full max-w-md mx-auto relative z-10">
+                <div
+                    class="p-density-comfy border-b border-outline-variant flex justify-between items-center bg-surface-container-highest">
+                    <h2 class="font-headline-sm text-headline-sm text-on-surface">录入新交易</h2>
+                    <button class="text-on-surface-variant hover:text-on-surface transition-colors"
+                        id="close-new-trade-modal">
+                        <span class="material-symbols-outlined">close</span>
+                    </button>
+                </div>
+                <div class="p-density-comfy flex-1 flex flex-col gap-margin">
+                    <!-- 买卖切换 -->
+                    <div class="flex rounded border border-outline-variant overflow-hidden" id="trade-side-toggle">
+                        <button
+                            class="flex-1 py-density-high bg-[#22C55E] text-white font-label-xs text-label-xs text-center border-r border-outline-variant active-side hover:bg-[#22C55E] hover:text-white"
+                            data-side="buy">买入</button>
+                        <button
+                            class="flex-1 py-density-high bg-transparent text-on-surface-variant hover:bg-[#EF4444] hover:text-white font-label-xs text-label-xs text-center transition-colors"
+                            data-side="sell">卖出</button>
+                    </div>
+                    <!-- 股票代码（可输入，自动大写） -->
+                    <div class="flex flex-col gap-unit">
+                        <label class="font-label-xs text-label-xs text-on-surface-variant uppercase tracking-wider"
+                            for="trade-symbol">股票代码</label>
+                        <input type="text" id="trade-symbol" maxlength="5" placeholder="例如 AAPL" value="AAPL"
+                            class="w-full bg-[#0B0E14] border border-outline-variant rounded px-density-high py-density-high font-data-mono text-data-mono text-on-surface focus:border-[#22C55E] focus:ring-1 focus:ring-[#22C55E] focus:outline-none uppercase transition-all">
+                    </div>
+                    <!-- 成交数量 + 快捷按钮（带按下动画） -->
+                    <div class="flex flex-col gap-unit">
+                        <label
+                            class="font-label-xs text-label-xs text-on-surface-variant uppercase tracking-wider flex justify-between"
+                            for="trade-qty">
+                            <span>成交数量</span>
+                        </label>
+                        <input
+                            class="w-full bg-[#0B0E14] border border-outline-variant rounded px-density-high py-density-high font-data-mono text-data-mono text-on-surface focus:border-[#22C55E] focus:ring-1 focus:ring-[#22C55E] focus:outline-none text-right"
+                            placeholder="0" type="number" id="trade-qty" value="100" min="0" step="1">
+                        <div class="flex gap-unit mt-unit" id="qty-presets">
+                            <button
+                                class="flex-1 bg-surface-variant text-on-surface-variant font-label-xs text-label-xs py-1 rounded border border-outline-variant hover:bg-surface-container-highest active:scale-95 transition"
+                                data-qty="5">5</button>
+                            <button
+                                class="flex-1 bg-surface-variant text-on-surface-variant font-label-xs text-label-xs py-1 rounded border border-outline-variant hover:bg-surface-container-highest active:scale-95 transition"
+                                data-qty="10">10</button>
+                            <button
+                                class="flex-1 bg-surface-variant text-on-surface-variant font-label-xs text-label-xs py-1 rounded border border-outline-variant hover:bg-surface-container-highest active:scale-95 transition"
+                                data-qty="30">30</button>
+                            <button
+                                class="flex-1 bg-surface-variant text-on-surface-variant font-label-xs text-label-xs py-1 rounded border border-outline-variant hover:bg-surface-container-highest active:scale-95 transition"
+                                data-qty="50">50</button>
+                            <button
+                                class="flex-1 bg-surface-variant text-on-surface-variant font-label-xs text-label-xs py-1 rounded border border-outline-variant hover:bg-surface-container-highest active:scale-95 transition"
+                                data-qty="100">100</button>
+                        </div>
+                    </div>
+                    <!-- 成交价格 + 估算金额（结构完全对齐版） -->
+                    <div class="flex flex-col gap-unit">
+                        <!-- 两个标签放在同一行，使用 grid 或 flex 对齐 -->
+                        <div class="grid grid-cols-2 gap-gutter">
+                            <label class="font-label-xs text-label-xs text-on-surface-variant uppercase tracking-wider"
+                                for="trade-price">
+                                <span>成交价格 (USD)</span>
+                            </label>
+                            <span
+                                class="font-label-xs text-label-xs text-on-surface-variant uppercase tracking-wider">估算成交额</span>
+                        </div>
+                        <!-- 输入框与展示框并排 -->
+                        <div class="grid grid-cols-2 gap-gutter">
+                            <input
+                                class="w-full bg-[#0B0E14] border border-outline-variant rounded px-density-high py-density-high font-data-mono text-data-mono text-on-surface focus:border-[#22C55E] focus:ring-1 focus:ring-[#22C55E] focus:outline-none text-right"
+                                type="number" step="0.01" min="0" id="trade-price" value="175.49">
+                            <div class="w-full bg-[#1e293b] border border-outline-variant rounded px-density-high py-[10px] font-data-mono text-data-mono text-on-surface text-right leading-[18px] opacity-90 cursor-default select-none"
+                                id="trade-estimate">17549.00</div>
+                        </div>
+                    </div>
+                </div>
+                <div
+                    class="p-density-comfy border-t border-outline-variant bg-surface-container-highest flex justify-end gap-gutter">
+                    <button
+                        class="px-density-comfy py-density-high border border-[#94A3B8] text-on-surface font-label-xs text-label-xs rounded hover:bg-surface-variant transition-colors"
+                        id="cancel-new-trade">取消</button>
+                    <button
+                        class="px-density-comfy py-density-high bg-[#22C55E] text-white font-label-xs text-label-xs rounded hover:opacity-90 transition-opacity"
+                        id="confirm-new-trade">确认保存</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Delete Single Transaction Modal -->
+    <div class="fixed inset-0 z-[100] bg-[#051424]/60 backdrop-blur-sm items-center justify-center p-4"
+        id="modal-delete-single" style="display: none;">
+        <div class="w-full">
+            <div
+                class="bg-[#1C222D] border-l-2 border-l-error border border-outline-variant rounded-xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] overflow-hidden flex flex-col w-full max-w-md mx-auto relative z-10">
+                <div
+                    class="p-density-comfy border-b border-outline-variant flex justify-between items-center bg-surface-container-highest">
+                    <h2 class="font-headline-sm text-headline-sm text-error flex items-center gap-density-high">
+                        <span class="material-symbols-outlined text-error">warning</span>删除交易记录确认
+                    </h2>
+                    <button class="text-on-surface-variant hover:text-on-surface transition-colors"
+                        id="close-delete-modal-x">
+                        <span class="material-symbols-outlined">close</span>
+                    </button>
+                </div>
+                <div class="p-density-comfy flex-1 flex flex-col gap-margin">
+                    <p class="font-body-md text-body-md text-on-surface-variant">您确定要删除该条交易记录吗？</p>
+                    <div
+                        class="bg-[#0B0E14] border border-outline-variant rounded p-density-high flex flex-col gap-unit">
+                        <div class="flex justify-between items-center"><span
+                                class="font-label-xs text-label-xs text-on-surface-variant uppercase">代码</span><span
+                                class="font-data-mono text-data-mono text-on-surface" id="modal-del-symbol">AAPL</span>
+                        </div>
+                        <div class="flex justify-between items-center"><span
+                                class="font-label-xs text-label-xs text-on-surface-variant uppercase">方向</span><span
+                                class="font-label-xs text-label-xs text-[#22C55E]" id="modal-del-side">买入</span></div>
+                        <div class="flex justify-between items-center"><span
+                                class="font-label-xs text-label-xs text-on-surface-variant uppercase">数量</span><span
+                                class="font-data-mono text-data-mono text-on-surface" id="modal-del-qty">100</span>
+                        </div>
+                    </div>
+                    <div
+                        class="bg-error-container/10 border border-error/30 rounded p-density-high flex gap-density-high items-start">
+                        <span class="material-symbols-outlined text-error text-[18px] mt-0.5">info</span>
+                        <p class="font-label-xs text-label-xs text-on-surface-variant">此操作不可撤销。</p>
+                    </div>
+                </div>
+                <div
+                    class="p-density-comfy border-t border-outline-variant bg-surface-container-highest flex justify-end gap-gutter">
+                    <button class="px-4 py-2 bg-[#2D3748] text-on-surface rounded hover:opacity-90 transition-all"
+                        id="cancel-delete-btn">取消</button>
+                    <button
+                        class="px-4 py-2 bg-[#EF4444] text-white rounded shadow-lg shadow-error/20 hover:opacity-90 transition-all flex items-center gap-1"
+                        id="confirm-delete-action">
+                        <span class="material-symbols-outlined text-[16px]">delete</span>确认删除
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Delete Card Confirmation Modal -->
+    <div class="fixed inset-0 z-[100] bg-[#051424]/60 backdrop-blur-sm items-center justify-center p-4"
+        id="modal-delete-card" style="display: none;">
+        <div class="w-full">
+            <div
+                class="bg-[#1C222D] border-l-2 border-l-error border border-outline-variant rounded shadow-[0px_10px_30px_rgba(0,0,0,0.5)] overflow-hidden flex flex-col w-full max-w-md mx-auto relative z-10">
+                <div
+                    class="p-density-comfy border-b border-outline-variant flex justify-between items-center bg-surface-container-highest">
+                    <h2 class="font-headline-sm text-headline-sm text-error flex items-center gap-density-high">
+                        <span class="material-symbols-outlined text-error">warning</span>
+                        删除记录确认
+                    </h2>
+                    <button class="text-on-surface-variant hover:text-on-surface transition-colors"
+                        id="close-delete-card-modal-x">
+                        <span class="material-symbols-outlined">close</span>
+                    </button>
+                </div>
+                <div class="p-density-comfy flex-1 flex flex-col gap-margin">
+                    <!-- 删除卡片专用提示（默认显示） -->
+                    <div id="delete-card-info">
+                        <p class="font-body-md text-body-md text-on-surface-variant">
+                            您确定要删除该品种的所有交易记录吗？
+                            <strong
+                                class="text-on-surface font-data-mono text-data-mono bg-[#0B0E14] px-1 py-0.5 rounded border border-outline-variant"
+                                id="delete-card-symbol">NVDA</strong>?
+                        </p>
+                    </div>
+                    <div
+                        class="bg-error-container/10 border border-error/30 rounded p-density-high flex gap-density-high items-start">
+                        <span class="material-symbols-outlined text-error text-[18px] mt-0.5">info</span>
+                        <p class="font-label-xs text-label-xs text-on-surface-variant">此操作不可撤销，系统将永久移除该品种的所有持仓历史和盈亏计算数据。
+                        </p>
+                    </div>
+                </div>
+                <div
+                    class="p-density-comfy border-t border-outline-variant bg-surface-container-highest flex justify-end gap-gutter">
+                    <button
+                        class="px-density-comfy py-density-high border border-[#94A3B8] text-on-surface font-label-xs text-label-xs rounded hover:bg-surface-variant transition-colors"
+                        id="cancel-delete-card-btn">取消</button>
+                    <button
+                        class="px-density-comfy py-density-high bg-[#EF4444] text-white font-label-xs text-label-xs rounded hover:opacity-90 transition-opacity flex items-center gap-unit"
+                        id="confirm-delete-card-action">
+                        <span class="material-symbols-outlined text-[16px]">delete</span>
+                        确认删除
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Delete History Confirmation Modal -->
+    <div class="fixed inset-0 z-[100] bg-[#051424]/60 backdrop-blur-sm items-center justify-center p-4"
+        id="modal-delete-history" style="display: none;">
+        <div class="w-full">
+            <div
+                class="bg-[#1C222D] border-l-2 border-l-error border border-outline-variant rounded shadow-[0px_10px_30px_rgba(0,0,0,0.5)] overflow-hidden flex flex-col w-full max-w-md mx-auto relative z-10">
+                <div
+                    class="p-density-comfy border-b border-outline-variant flex justify-between items-center bg-surface-container-highest">
+                    <h2 class="font-headline-sm text-headline-sm text-error flex items-center gap-density-high">
+                        <span class="material-symbols-outlined text-error">warning</span>
+                        删除历史记录确认
+                    </h2>
+                    <button class="text-on-surface-variant hover:text-on-surface transition-colors"
+                        id="close-delete-history-modal-x">
+                        <span class="material-symbols-outlined">close</span>
+                    </button>
+                </div>
+                <div class="p-density-comfy flex-1 flex flex-col gap-margin">
+                    <div class="flex flex-col gap-unit">
+                        <p class="font-body-md text-body-md text-on-surface-variant">您确定要删除该条历史记录吗？</p>
+                        <div
+                            class="bg-[#0B0E14] border border-outline-variant rounded p-density-high flex flex-col gap-unit">
+                            <div class="flex justify-between items-center">
+                                <span class="font-label-xs text-label-xs text-on-surface-variant uppercase">日期</span>
+                                <span class="font-data-mono text-data-mono text-on-surface"
+                                    id="delete-history-date">-</span>
+                            </div>
+                            <div class="flex justify-between items-center">
+                                <span class="font-label-xs text-label-xs text-on-surface-variant uppercase">交易ID</span>
+                                <span class="font-data-mono text-data-mono text-on-surface"
+                                    id="delete-history-id">-</span>
+                            </div>
+                            <div class="flex justify-between items-center">
+                                <span class="font-label-xs text-label-xs text-on-surface-variant uppercase">股票代码</span>
+                                <span class="font-data-mono text-data-mono text-on-surface"
+                                    id="delete-history-symbol">-</span>
+                            </div>
+                            <div class="flex justify-between items-center">
+                                <span class="font-label-xs text-label-xs text-on-surface-variant uppercase">盈亏</span>
+                                <span class="font-data-mono text-data-mono" id="delete-history-pnl">-</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div
+                        class="bg-error-container/10 border border-error/30 rounded p-density-high flex gap-density-high items-start">
+                        <span class="material-symbols-outlined text-error text-[18px] mt-0.5">info</span>
+                        <p class="font-label-xs text-label-xs text-on-surface-variant">此操作不可撤销，该条历史记录将被永久移除。</p>
+                    </div>
+                </div>
+                <div
+                    class="p-density-comfy border-t border-outline-variant bg-surface-container-highest flex justify-end gap-gutter">
+                    <button
+                        class="px-density-comfy py-density-high border border-[#94A3B8] text-on-surface font-label-xs text-label-xs rounded hover:bg-surface-variant transition-colors"
+                        id="cancel-delete-history-btn">取消</button>
+                    <button
+                        class="px-density-comfy py-density-high bg-[#EF4444] text-white font-label-xs text-label-xs rounded hover:opacity-90 transition-opacity flex items-center gap-unit"
+                        id="confirm-delete-history-action">
+                        <span class="material-symbols-outlined text-[16px]">delete</span>
+                        确认删除
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Settle Card Modal -->
+    <div class="fixed inset-0 z-[100] bg-[#051424]/60 backdrop-blur-sm items-center justify-center p-4"
+        id="modal-settle-card" style="display: none;">
+        <div class="w-full">
+            <div
+                class="bg-[#1C222D] border border-outline-variant rounded shadow-[0px_10px_30px_rgba(0,0,0,0.5)] overflow-hidden flex flex-col w-full max-w-md mx-auto relative z-10">
+                <div
+                    class="p-density-comfy border-b border-outline-variant flex justify-between items-center bg-surface-container-highest">
+                    <h2 class="font-headline-sm text-headline-sm text-on-surface">交易结算报告</h2>
+                    <button class="text-on-surface-variant hover:text-on-surface transition-colors"
+                        id="close-settle-modal">
+                        <span class="material-symbols-outlined">close</span>
+                    </button>
+                </div>
+                <div class="p-density-comfy flex-1 flex flex-col gap-margin">
+                    <div class="flex items-center justify-between pb-margin border-b border-outline-variant">
+                        <div class="flex items-center gap-density-high">
+                            <div
+                                class="w-10 h-10 bg-primary-container/20 rounded flex items-center justify-center border border-primary/30">
+                                <span class="font-data-mono text-data-mono text-primary font-bold"
+                                    id="settle-symbol">TSLA</span>
+                            </div>
+                            <div>
+                                <div class="font-headline-sm text-headline-sm text-on-surface" id="settle-symbol-full">
+                                </div>
+                                <div class="font-label-xs text-label-xs text-on-surface-variant uppercase">结算批次 #<span
+                                        id="settle-batch-id"></span></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-2 gap-gutter">
+                        <div class="bg-[#0B0E14] border border-outline-variant rounded p-density-high flex flex-col">
+                            <span
+                                class="font-label-xs text-label-xs text-on-surface-variant uppercase tracking-wider mb-unit">累计买入成本</span>
+                            <span class="font-data-mono text-data-mono text-on-surface"
+                                id="settle-buy-total">$0.00</span>
+                        </div>
+                        <div class="bg-[#0B0E14] border border-outline-variant rounded p-density-high flex flex-col">
+                            <span
+                                class="font-label-xs text-label-xs text-on-surface-variant uppercase tracking-wider mb-unit">累计卖出金额</span>
+                            <span class="font-data-mono text-data-mono text-on-surface"
+                                id="settle-sell-total">$0.00</span>
+                        </div>
+                    </div>
+                    <div
+                        class="bg-surface-container rounded border border-outline-variant p-margin flex flex-col items-center justify-center py-8">
+                        <span
+                            class="font-label-xs text-label-xs text-on-surface-variant uppercase tracking-wider mb-unit">实现盈亏</span>
+                        <span class="font-display-price text-display-price flex items-center gap-unit"
+                            id="settle-pnl-display">
+                            <span id="settle-pnl-value">+$0.00</span>
+                            <span class="material-symbols-outlined text-[24px]" id="settle-pnl-icon">trending_up</span>
+                        </span>
+                    </div>
+                </div>
+                <div
+                    class="p-density-comfy border-t border-outline-variant bg-surface-container-highest flex justify-end gap-gutter">
+                    <button
+                        class="px-density-comfy py-density-high bg-primary-container text-on-primary-container font-label-xs text-label-xs rounded hover:opacity-90 transition-opacity"
+                        id="confirm-settle-btn">结转至历史清单</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- History Detail Modal (表头固定版) -->
+    <div class="fixed inset-0 z-[100] bg-[#051424]/60 backdrop-blur-sm items-center justify-center p-4"
+        id="modal-history-detail" style="display: none;">
+        <div class="w-full">
+            <div class="bg-[#1C222D] border border-[#2D3748] w-full max-w-2xl overflow-hidden rounded shadow-2xl mx-auto relative z-10"
+                style="display: flex; flex-direction: column; max-height: 90vh;">
+                <!-- 标题栏 -->
+                <div class="px-6 py-5 border-b border-[#2D3748] flex-shrink-0 relative">
+                    <div class="flex flex-col items-center">
+                        <h1 class="font-display-price text-[36px] leading-none text-white tracking-tighter text-center"
+                            id="detail-symbol">AAPL</h1>
+                        <span class="font-display-price text-[32px] leading-none mt-1 block text-center"
+                            id="detail-pnl-value">+$0.00</span>
+                    </div>
+                    <button id="close-detail-modal"
+                        class="absolute top-3 right-3 text-[#94A3B8] hover:text-white hover:bg-white/10 rounded-full p-2 transition-all opacity-0 hover:opacity-100">
+                        <span class="material-symbols-outlined">close</span>
+                    </button>
+                </div>
+
+                <!-- 固定表头 (独立 div，不参与滚动) -->
+                <div class="bg-[#1C222D]" style="flex-shrink: 0;">
+                    <table class="w-full text-left border-collapse">
+                        <thead>
+                            <tr
+                                class="text-[#94A3B8] font-data-mono text-sm uppercase tracking-wider border-b border-[#2D3748]">
+                                <th class="px-6 py-3 font-semibold">时间</th>
+                                <th class="px-6 py-3 font-semibold text-center">方向</th>
+                                <th class="px-6 py-3 font-semibold text-right">数量</th>
+                                <th class="px-6 py-3 font-semibold text-right">价格</th>
+                                <th class="px-6 py-3 font-semibold text-right">金额</th>
+                            </tr>
+                        </thead>
+                    </table>
+                </div>
+
+                <!-- 可滚动明细行 (独立滚动容器) -->
+                <div id="detail-rows-container" style="flex: 1 1 auto; min-height: 0; overflow-y: auto;">
+                    <table class="w-full text-left border-collapse">
+                        <tbody class="text-on-surface font-data-mono text-body-md divide-y divide-[#2D3748]/50"
+                            id="detail-tbody">
+                            <!-- 动态渲染 -->
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- 底部按钮 -->
+                <div class="px-6 py-4 border-t border-[#2D3748] flex justify-end bg-[#151921] flex-shrink-0">
+                    <button id="close-detail-btn"
+                        class="bg-[#0B0E14] border border-[#2D3748] text-on-surface font-bold rounded hover:bg-[#1C222D] transition-all px-10 py-3 text-body-md uppercase tracking-wider">关闭</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="config.js"></script>
+    <script>
+        const API_BASE_URL = window.APP_CONFIG?.API_BASE_URL;
+        if (!API_BASE_URL) {
+            throw new Error('缺少 API_BASE_URL 配置，请检查 config.js');
+        }
+
+        function updateClock() {
+            const now = new Date();
+            const estParts = new Intl.DateTimeFormat('en-US', {
+                timeZone: 'America/New_York', hour12: false,
+                year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit'
+            }).formatToParts(now).reduce((acc, part) => ({ ...acc, [part.type]: part.value }), {});
+
+            const hour = parseInt(estParts.hour);
+            const min = parseInt(estParts.minute);
+            const timeVal = hour + min / 60;
+            let status = "夜盘时段", icon = "🌙";
+            if (timeVal >= 4 && timeVal < 9.5) { status = "盘前时段"; icon = "us"; }
+            else if (timeVal >= 9.5 && timeVal < 16) { status = "盘中时段"; icon = "us"; }
+            else if (timeVal >= 16 && timeVal < 20) { status = "盘后时段"; icon = "us"; }
+
+            document.getElementById('market-info').innerHTML =
+                `当前市场：${icon} <span class="text-secondary font-bold mx-1">${status}</span> | 美东时间：${estParts.year}-${estParts.month}-${estParts.day} ${estParts.hour}:${estParts.minute}:${estParts.second}`;
+        }
+        setInterval(updateClock, 1000);
+        updateClock();
+
+        // Tab Switching Logic
+        const btnConsole = document.getElementById('btn-console');
+        const btnHistory = document.getElementById('btn-history');
+        const viewConsole = document.getElementById('view-console');
+        const viewHistory = document.getElementById('view-history');
+
+        const activeClasses = ['bg-surface-bright', 'shadow-sm', 'border-outline-variant/50', 'text-primary', 'font-semibold'];
+        const inactiveClasses = ['text-on-surface-variant', 'hover:text-on-surface', 'hover:bg-surface-container-highest', 'border-transparent'];
+
+        function setActiveTab(tab) {
+            if (tab === 'console') {
+                btnConsole.classList.remove(...inactiveClasses);
+                btnConsole.classList.add(...activeClasses);
+                btnHistory.classList.remove(...activeClasses);
+                btnHistory.classList.add(...inactiveClasses);
+                viewConsole.classList.remove('hidden');
+                viewHistory.classList.add('hidden');
+            } else {
+                btnHistory.classList.remove(...inactiveClasses);
+                btnHistory.classList.add(...activeClasses);
+                btnConsole.classList.remove(...activeClasses);
+                btnConsole.classList.add(...inactiveClasses);
+                viewHistory.classList.remove('hidden');
+                viewConsole.classList.add('hidden');
+                loadHistory();
+            }
+        }
+
+        btnConsole.addEventListener('click', () => setActiveTab('console'));
+        btnHistory.addEventListener('click', () => setActiveTab('history'));
+
+        // ==========================================
+        // // Delete Modal Logic (v1.0.5 粉尘爆炸版)
+        // ==========================================
+
+        // 1. 初始化粒子爆炸画布
+        const canvas = document.createElement('canvas');
+        canvas.id = 'explosion-canvas';
+        // 设置画布样式，确保它覆盖整个屏幕且不干扰点击
+        Object.assign(canvas.style, {
+            position: 'fixed',
+            top: '0',
+            left: '0',
+            width: '100vw',
+            height: '100vh',
+            pointerEvents: 'none',
+            zIndex: '9999'
+        });
+        document.body.appendChild(canvas);
+        const ctx = canvas.getContext('2d');
+
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        // 2. 粒子爆炸核心引擎 (调整扩散范围版)
+        function createExplosion(element) {
+            const rect = element.getBoundingClientRect();
+            const particles = [];
+            const particleCount = 150; // 稍微减少数量，增加粉末感
+
+            const centerX = rect.left + rect.width / 2;
+            const centerY = rect.top + rect.height / 2;
+
+            for (let i = 0; i < particleCount; i++) {
+                const angle = Math.random() * Math.PI * 2;
+
+                // --- 修改点 1: 降低速度 ---
+                // 将系数从 1.5 降到 0.8，这会直接缩小爆炸半径
+                const speed = (Math.random() * rect.width * 0.8) / 30;
+
+                particles.push({
+                    x: centerX,
+                    y: centerY,
+                    vx: Math.cos(angle) * speed,
+                    vy: Math.sin(angle) * speed,
+                    size: Math.random() * 2 + 1, // 稍微缩小粒子尺寸
+                    color: i % 2 === 0 ? '#4ae176' : '#ff5252',
+                    alpha: 1,
+                    // --- 修改点 2: 加快消失速度 ---
+                    // 增加衰减率，让粒子在飞远之前就消失，从而控制视觉范围
+                    decay: Math.random() * 0.02 + 0.02
+                });
+            }
+
+            function animate() {
+                if (particles.length === 0) {
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    return;
+                }
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                for (let i = particles.length - 1; i >= 0; i--) {
+                    const p = particles[i];
+                    p.x += p.vx;
+                    p.y += p.vy;
+                    p.alpha -= p.decay;
+
+                    if (p.alpha <= 0) {
+                        particles.splice(i, 1);
+                        continue;
+                    }
+
+                    ctx.globalAlpha = p.alpha;
+                    ctx.fillStyle = p.color;
+                    ctx.beginPath();
+                    // 绘制粉末状的小圆点
+                    ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+                requestAnimationFrame(animate);
+            }
+            animate();
+        }
+        let currentCardId = null; // 记录当前操作的目标卡片ID
+        window._pendingDeleteHistory = null;   // 待删除的历史记录 { id, symbol }
+        let historyDeleting = false;              // 防止重复删除
+        window._historyRowToDelete = null;        // 待删除的历史行元素
+        // 历史分页全局变量
+        let allHistoryData = [];
+        let currentHistoryPage = 1;
+        const historyPageSize = 8;
+        // 3. 业务逻辑控制
+        let targetRowToDelete = null;
+        let targetCardToUpdate = null;
+        const deleteModal = document.getElementById('modal-delete-single');
+        const confirmBtn = document.getElementById('confirm-delete-action');
+
+        // ---------- 删除卡片确认弹窗逻辑 ----------
+        const deleteCardModal = document.getElementById('modal-delete-card');
+        const cancelDeleteCardBtn = document.getElementById('cancel-delete-card-btn');
+        const closeDeleteCardX = document.getElementById('close-delete-card-modal-x');
+        const confirmDeleteCardBtn = document.getElementById('confirm-delete-card-action');
+        const deleteHistoryModal = document.getElementById('modal-delete-history');
+        const cancelDeleteHistoryBtn = document.getElementById('cancel-delete-history-btn');
+        const closeDeleteHistoryX = document.getElementById('close-delete-history-modal-x');
+        const confirmDeleteHistoryBtn = document.getElementById('confirm-delete-history-action');
+
+        function closeDeleteCardModal() {
+            if (deleteCardModal) {
+                deleteCardModal.style.display = 'none';
+                const contentDiv = deleteCardModal.querySelector('.bg-\\[\\#1C222D\\]');
+                if (contentDiv) {
+                    contentDiv.style.transform = '';
+                    contentDiv.style.opacity = '';
+                    contentDiv.style.transition = '';
+                }
+                setBodyScrollLock(false);
+                deleteCardModal.dataset.targetCard = '';
+                window._pendingDeleteCard = null;
+            }
+        }
+
+        function showDeleteCardConfirmModal(card, triggerElement) {
+            if (!deleteCardModal || !card) return;
+
+            const symbol = card.querySelector('.card-symbol')?.textContent.trim() || '';
+            const symbolSpan = document.getElementById('delete-card-symbol');
+
+            window._pendingDeleteHistory = null;
+            window._historyRowToDelete = null;
+            window._pendingDeleteCard = card;
+            deleteCardModal.dataset.targetCard = card.dataset.stockId || '';
+
+            if (symbolSpan) {
+                symbolSpan.textContent = symbol || '-';
+            }
+
+            openDeleteModalWithAnimation(triggerElement, deleteCardModal);
+        }
+
+        function closeDeleteHistoryModal() {
+            if (deleteHistoryModal) {
+                deleteHistoryModal.style.display = 'none';
+                const contentDiv = deleteHistoryModal.querySelector('.bg-\\[\\#1C222D\\]');
+                if (contentDiv) {
+                    contentDiv.style.transform = '';
+                    contentDiv.style.opacity = '';
+                    contentDiv.style.transition = '';
+                }
+                setBodyScrollLock(false);
+                window._pendingDeleteHistory = null;
+                window._historyRowToDelete = null;
+            }
+        }
+
+        function showDeleteHistoryConfirmModal(record, triggerElement) {
+            if (!deleteHistoryModal || !record) return;
+
+            const settleDate = new Date(record.settleTime);
+            const pnlEl = document.getElementById('delete-history-pnl');
+
+            window._pendingDeleteCard = null;
+            window._pendingDeleteHistory = { id: record._id, symbol: record.symbol };
+
+            document.getElementById('delete-history-date').textContent = `${settleDate.getFullYear()}/${String(settleDate.getMonth() + 1).padStart(2, '0')}/${String(settleDate.getDate()).padStart(2, '0')}`;
+            document.getElementById('delete-history-id').textContent = record._id;
+            document.getElementById('delete-history-symbol').textContent = record.symbol;
+            pnlEl.textContent = `${record.pnl >= 0 ? '+' : '-'}$${Math.abs(record.pnl).toFixed(2)}`;
+            pnlEl.classList.remove('text-[#22c55e]', 'text-[#ef4444]');
+            pnlEl.classList.add(record.pnl >= 0 ? 'text-[#22c55e]' : 'text-[#ef4444]');
+
+            openDeleteModalWithAnimation(triggerElement, deleteHistoryModal);
+        }
+
+        if (cancelDeleteCardBtn) cancelDeleteCardBtn.addEventListener('click', closeDeleteCardModal);
+        if (closeDeleteCardX) closeDeleteCardX.addEventListener('click', closeDeleteCardModal);
+        if (cancelDeleteHistoryBtn) cancelDeleteHistoryBtn.addEventListener('click', closeDeleteHistoryModal);
+        if (closeDeleteHistoryX) closeDeleteHistoryX.addEventListener('click', closeDeleteHistoryModal);
+
+        if (confirmDeleteCardBtn) {
+            confirmDeleteCardBtn.addEventListener('click', async () => {
+                const card = window._pendingDeleteCard;
+                if (!card) return;
+
+                const stockId = card.dataset.stockId;
+                if (!stockId) {
+                    console.error('卡片缺少 stockId');
+                    return;
+                }
+
+                closeDeleteCardModal();
+                createExplosion(card);
+                card.style.transition = 'opacity 0.15s';
+                card.style.opacity = '0';
+                card.style.pointerEvents = 'none';
+
+                try {
+                    const response = await fetch(`${API_BASE_URL}/api/card/${stockId}`, {
+                        method: 'DELETE'
+                    });
+                    if (!response.ok) throw new Error('删除失败');
+                    await loadStocks();
+                } catch (error) {
+                    console.error('删除卡片失败:', error);
+                    alert('删除失败: ' + error.message);
+                    card.style.opacity = '';
+                    card.style.pointerEvents = '';
+                }
+            });
+        }
+
+        if (confirmDeleteHistoryBtn) {
+            confirmDeleteHistoryBtn.addEventListener('click', async () => {
+                const pendingHistory = window._pendingDeleteHistory;
+                if (!pendingHistory || historyDeleting) return;
+
+                const historyId = pendingHistory.id;
+                const row = window._historyRowToDelete;
+                if (row) {
+                    createExplosion(row);
+                    row.style.transition = 'opacity 0.15s';
+                    row.style.opacity = '0';
+                    row.style.pointerEvents = 'none';
+                }
+
+                closeDeleteHistoryModal();
+                historyDeleting = true;
+
+                setTimeout(async () => {
+                    try {
+                        const response = await fetch(`${API_BASE_URL}/api/history/${historyId}`, { method: 'DELETE' });
+                        if (!response.ok) throw new Error('删除失败');
+                        await loadHistory();
+                    } catch (error) {
+                        console.error('删除历史记录失败:', error);
+                        alert('删除失败: ' + error.message);
+                    } finally {
+                        window._pendingDeleteHistory = null;
+                        window._historyRowToDelete = null;
+                        historyDeleting = false;
+                    }
+                }, 600);
+            });
+        }
+
+        const detailModal = document.getElementById('modal-history-detail');
+        const closeDetailBtns = document.querySelectorAll('#close-detail-modal, #close-detail-btn');
+        function closeDetailModal() {
+            const modal = document.getElementById('modal-history-detail');
+            if (modal) {
+                modal.style.display = 'none';
+                const contentDiv = modal.querySelector('.bg-\\[\\#1C222D\\]');
+                if (contentDiv) {
+                    contentDiv.style.transform = '';
+                    contentDiv.style.opacity = '';
+                }
+                setBodyScrollLock(false);
+            }
+        }
+        closeDetailBtns.forEach(btn => btn?.addEventListener('click', closeDetailModal));
+
+
+        // ---------- 结算弹窗逻辑 ----------
+        const settleModal = document.getElementById('modal-settle-card');
+        const closeSettleBtn = document.getElementById('close-settle-modal');
+        const confirmSettleBtn = document.getElementById('confirm-settle-btn');
+
+        function closeSettleModal() {
+            if (settleModal) {
+                settleModal.style.display = 'none';
+                const contentDiv = settleModal.querySelector('.bg-\\[\\#1C222D\\]');
+                if (contentDiv) {
+                    contentDiv.style.transform = '';
+                    contentDiv.style.opacity = '';
+                    contentDiv.style.transition = '';
+                }
+                setBodyScrollLock(false);
+                window._pendingSettleCard = null;
+            }
+        }
+        closeSettleBtn?.addEventListener('click', closeSettleModal);
+
+        function openSettleModal(card, triggerBtn) {
+            const symbol = card.querySelector('.card-symbol').textContent;
+            const stockId = card.dataset.stockId;
+
+            const rows = card.querySelectorAll('.transaction-row');
+            let buyTotal = 0, sellTotal = 0;
+            rows.forEach(r => {
+                const side = r.querySelector('.side-text').textContent.trim();
+                const totalText = r.querySelector('.total-val').textContent.trim();
+                // 取绝对值，因为明细行金额已带上方向符号（买入 +，卖出 -）
+                const total = Math.abs(parseFloat(totalText.replace(/[^0-9.-]+/g, ''))) || 0;
+                if (side === '买入') buyTotal += total;
+                else sellTotal += total;
+            });
+            const pnl = sellTotal - buyTotal;
+
+            document.getElementById('settle-symbol').textContent = symbol;
+            document.getElementById('settle-symbol-full').textContent = symbol;
+            document.getElementById('settle-batch-id').textContent = stockId.slice(-6);
+            document.getElementById('settle-buy-total').textContent = `$${buyTotal.toFixed(2)}`;
+            document.getElementById('settle-sell-total').textContent = `$${sellTotal.toFixed(2)}`;
+
+            const pnlValueSpan = document.getElementById('settle-pnl-value');
+            const pnlIcon = document.getElementById('settle-pnl-icon');
+            const pnlDisplay = document.getElementById('settle-pnl-display');
+            const confirmBtn = document.getElementById('confirm-settle-btn');
+
+            const isProfit = pnl >= 0;
+            pnlValueSpan.textContent = `${isProfit ? '+' : '-'}$${Math.abs(pnl).toFixed(2)}`;
+            pnlIcon.textContent = isProfit ? 'trending_up' : 'trending_down';
+            pnlDisplay.classList.remove('text-[#22C55E]', 'text-[#EF4444]');
+            pnlDisplay.classList.add(isProfit ? 'text-[#22C55E]' : 'text-[#EF4444]');
+
+            confirmBtn.classList.remove('bg-[#22C55E]', 'bg-[#EF4444]', 'text-white', 'bg-primary-container', 'text-on-primary-container');
+            confirmBtn.classList.add(isProfit ? 'bg-[#22C55E]' : 'bg-[#EF4444]', 'text-white');
+
+            window._pendingSettleCard = card;
+
+            // ---- 手动处理动画，与 openDeleteModalWithAnimation 一致 ----
+            const modal = settleModal;
+            const triggerElement = triggerBtn;
+            if (!modal || !triggerElement) return;
+
+            const rect = triggerElement.getBoundingClientRect();
+            const centerX = rect.left + rect.width / 2;
+            const centerY = rect.top + rect.height / 2;
+            const viewportCenterX = window.innerWidth / 2;
+            const viewportCenterY = window.innerHeight / 2;
+            const offsetX = centerX - viewportCenterX;
+            const offsetY = centerY - viewportCenterY;
+
+            const contentDiv = modal.querySelector('.bg-\\[\\#1C222D\\]');
+            if (!contentDiv) return;
+
+            contentDiv.style.transition = 'none';
+            contentDiv.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(0)`;
+            contentDiv.style.opacity = '0';
+
+            modal.style.display = 'flex';
+            setBodyScrollLock(true);
+
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                    contentDiv.style.transition = 'transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.25s ease-out';
+                    contentDiv.style.transform = '';
+                    contentDiv.style.opacity = '';
+                });
+            });
+        }
+
+        confirmSettleBtn?.addEventListener('click', async () => {
+            const card = window._pendingSettleCard;
+            if (!card) return;
+            const stockId = card.dataset.stockId;
+
+            confirmSettleBtn.disabled = true;
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/settle/${stockId}`, { method: 'POST' });
+                if (!response.ok) throw new Error('结算失败');
+                closeSettleModal();
+                await loadStocks();
+                if (!viewHistory.classList.contains('hidden')) {
+                    loadHistory();
+                }
+            } catch (err) {
+                alert('结算失败: ' + err.message);
+            } finally {
+                confirmSettleBtn.disabled = false;
+            }
+        });
+        // 监听全局点击：删除、取消、叉号
+        document.addEventListener('click', (e) => {
+            const btn = e.target.closest('.btn-delete-row');
+            // 处理历史清单行点击（打开明细弹窗）
+            const historyRow = e.target.closest('#history-table-body tr[data-record-id]');
+            if (historyRow) {
+                const recordId = historyRow.dataset.recordId;
+                // 排除点击删除按钮的情况
+                if (recordId && !e.target.closest('.btn-delete-history')) {
+                    openHistoryDetailModal(e.target, recordId);
+                    return;
+                }
+            }
+            if (btn) {
+                targetRowToDelete = btn.closest('.transaction-row');
+                targetCardToUpdate = btn.closest('.bg-surface-container');
+                if (targetRowToDelete) {
+                    document.getElementById('modal-del-symbol').textContent = targetCardToUpdate.querySelector('h2').textContent;
+                    const qtyVal = targetRowToDelete.querySelector('.qty-val').textContent.trim();
+                    const sideText = targetRowToDelete.querySelector('.side-text').textContent.trim();
+                    const modalQtyEl = document.getElementById('modal-del-qty');
+                    const qtyNum = parseInt(qtyVal, 10);
+
+                    // 设置带符号的数量（对绝对值加符号，避免双重负号）
+                    if (sideText === '买入') {
+                        modalQtyEl.textContent = `+${Math.abs(qtyNum)}`;
+                        modalQtyEl.classList.remove('text-[#EF4444]');
+                        modalQtyEl.classList.add('text-[#22C55E]');
+                    } else {
+                        modalQtyEl.textContent = `-${Math.abs(qtyNum)}`;
+                        modalQtyEl.classList.remove('text-[#22C55E]');
+                        modalQtyEl.classList.add('text-[#EF4444]');
+                    }
+
+                    // 👇 新增：设置方向字段
+                    const sideEl = targetRowToDelete.querySelector('.side-text');
+                    const modalSideEl = document.getElementById('modal-del-side');
+                    if (sideEl && modalSideEl) {
+                        const sideText = sideEl.textContent.trim();
+                        modalSideEl.textContent = sideText;
+                        // 根据方向切换颜色
+                        modalSideEl.classList.remove('text-[#22C55E]', 'text-[#EF4444]');
+                        if (sideText === '买入') {
+                            modalSideEl.classList.add('text-[#22C55E]');
+                        } else {
+                            modalSideEl.classList.add('text-[#EF4444]');
+                        }
+                    }
+
+                    // 使用动画打开
+                    openDeleteModalWithAnimation(btn, deleteModal);
+                }
+            }
+            // ---------- 新增：处理删除整张卡片（打开确认弹窗） ----------
+            const topDeleteBtn = e.target.closest('.btn-delete-card');
+            const bottomDeleteBtn = e.target.closest('.btn-delete-card-bottom');
+            // 处理平仓结算按钮
+            const settleBtn = e.target.closest('.btn-settle-card');
+            if (settleBtn) {
+                const card = settleBtn.closest('.bg-surface-container');
+                if (card) openSettleModal(card, settleBtn);
+                return;
+            }
+            if (topDeleteBtn || bottomDeleteBtn) {
+                const card = (topDeleteBtn || bottomDeleteBtn).closest('.bg-surface-container');
+                if (card) {
+                    showDeleteCardConfirmModal(card, topDeleteBtn || bottomDeleteBtn);
+                }
+                return;
+            }
+            // 处理取消按钮和关闭叉号
+            if (e.target.closest('#cancel-delete-btn') || e.target.closest('#close-delete-modal-x')) {
+                if (deleteModal) {
+                    deleteModal.style.display = 'none';
+                    setBodyScrollLock(false);
+                    // 清除动画残留样式
+                    const contentDiv = deleteModal.querySelector('.bg-\\[\\#1C222D\\]');
+                    if (contentDiv) {
+                        contentDiv.style.transform = '';
+                        contentDiv.style.opacity = '';
+                        contentDiv.style.transition = '';
+                    }
+                }
+            }
+        });
+
+        // 4. 确认删除逻辑
+        if (confirmBtn) {
+            confirmBtn.onclick = async () => {
+                if (!targetRowToDelete || !targetCardToUpdate) return;
+
+                const row = targetRowToDelete;
+                const card = targetCardToUpdate;
+
+                // 获取股票ID和交易记录ID（需要确保渲染时保存了这些ID）
+                const stockId = card.dataset.stockId;          // 卡片上需存储 stock._id
+                const transactionId = row.dataset.transactionId; // 交易行需存储 tx._id
+
+                if (!stockId || !transactionId) {
+                    console.error('缺少 stockId 或 transactionId');
+                    return;
+                }
+
+                // 关闭弹窗
+                if (deleteModal) {
+                    deleteModal.style.display = 'none';
+                    setBodyScrollLock(false);
+                }
+
+                // 触发爆炸效果
+                createExplosion(row);
+                row.style.transition = 'opacity 0.1s';
+                row.style.opacity = '0';
+                row.style.pointerEvents = 'none';
+
+                try {
+                    const response = await fetch(`${API_BASE_URL}/api/transaction/${stockId}/${transactionId}`, {
+                        method: 'DELETE'
+                    });
+                    if (!response.ok) {
+                        const err = await response.json();
+                        throw new Error(err.message || '删除失败');
+                    }
+                    // 重新加载数据以确保前后端一致
+                    await loadStocks();
+                } catch (error) {
+                    console.error('删除失败:', error);
+                    alert('删除失败: ' + error.message);
+                    // 恢复行显示（如果失败）
+                    row.style.opacity = '';
+                    row.style.pointerEvents = '';
+                }
+            };
+        }
+        // ---------- 动态数据渲染 (新增) ----------
+        const API_URL = `${API_BASE_URL}/api/stocks`;
+        const cardsContainer = document.getElementById('cards-container');
+        const cardTemplate = document.getElementById('card-template');
+        const loadingPlaceholder = document.getElementById('loading-placeholder');
+
+        // 格式化日期时间 (API返回的是ISO字符串)
+        function formatTransactionTime(isoString) {
+            const date = new Date(isoString);
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            const hours = String(date.getHours()).padStart(2, '0');
+            const minutes = String(date.getMinutes()).padStart(2, '0');
+            return `${month}/${day} ${hours}:${minutes}`;
+        }
+
+        // 渲染单张卡片
+        function renderCard(stockData) {
+            const card = cardTemplate.content.cloneNode(true).firstElementChild;
+            // 存储股票ID
+            card.dataset.stockId = stockData._id;
+
+            // 填充基础信息
+            const symbolEl = card.querySelector('.card-symbol');
+            const priceEl = card.querySelector('.card-price');
+            const qtyEl = card.querySelector('.card-qty');
+            const totalEl = card.querySelector('.card-total');
+
+            symbolEl.textContent = stockData.symbol;
+
+            const totalQty = stockData.totalQty;
+            const avgPrice = stockData.avgPrice;
+            const totalInvestment = stockData.totalInvestment;
+
+            // 移除可能存在的颜色类
+            priceEl.classList.remove('text-[#22c55e]', 'text-[#ef4444]', 'text-on-surface');
+            qtyEl.classList.remove('text-[#22c55e]', 'text-[#ef4444]', 'text-on-surface');
+            totalEl.classList.remove('text-[#22c55e]', 'text-[#ef4444]', 'text-on-surface');
+
+            if (totalQty > 0) {
+                priceEl.classList.add('text-[#22c55e]');
+                qtyEl.classList.add('text-[#22c55e]');
+                totalEl.classList.add('text-[#22c55e]');
+                priceEl.textContent = `+$${avgPrice.toFixed(2)}`;       // 加正号
+                qtyEl.textContent = `+${totalQty}`;
+                totalEl.textContent = `+$${totalInvestment.toFixed(2)}`;
+            } else if (totalQty < 0) {
+                priceEl.classList.add('text-[#ef4444]');
+                qtyEl.classList.add('text-[#ef4444]');
+                totalEl.classList.add('text-[#ef4444]');
+                priceEl.textContent = `-$${Math.abs(avgPrice).toFixed(2)}`;  // 原有负号保持一致
+                qtyEl.textContent = totalQty;        // totalQty 本身为负，如 -10
+                totalEl.textContent = `-$${Math.abs(totalInvestment).toFixed(2)}`;
+            } else {
+                // 持仓为 0 时保持原样
+                priceEl.classList.add('text-on-surface');
+                qtyEl.classList.add('text-on-surface');
+                totalEl.classList.add('text-on-surface');
+                priceEl.textContent = `$${avgPrice.toFixed(2)}`;
+                qtyEl.textContent = '0';
+                totalEl.textContent = `$0.00`;
+            }
+
+            // 添加交易记录行（按时间倒序排列，最新在前）
+            const tbody = card.querySelector('.transaction-rows');
+            const sortedHistory = [...stockData.history].sort((a, b) => new Date(b.time) - new Date(a.time));
+
+            sortedHistory.forEach(tx => {
+                const row = document.createElement('div');
+                row.className = 'px-density-comfy py-density-high grid grid-cols-[1.4fr_0.8fr_1fr_1fr_1.2fr_24px] gap-unit font-data-mono text-data-mono hover:bg-surface-container-highest transition-colors items-center transaction-row odd:bg-transparent even:bg-white/5';
+                row.dataset.transactionId = tx._id;
+                const sideClass = tx.side === '买入' ? 'text-secondary' : 'text-error';
+                const date = new Date(tx.time);
+                const month = String(date.getMonth() + 1).padStart(2, '0');
+                const day = String(date.getDate()).padStart(2, '0');
+                const hours = String(date.getHours()).padStart(2, '0');
+                const minutes = String(date.getMinutes()).padStart(2, '0');
+                const timeStr = `${month}/${day} ${hours}:${minutes}`;
+
+                const isBuy = tx.side === '买入';
+                const qtyColorClass = isBuy ? 'text-secondary' : 'text-error';
+                const totalColorClass = isBuy ? 'text-secondary' : 'text-error';
+                const qtySign = isBuy ? '+' : '-';
+                const totalSign = isBuy ? '+' : '-';
+
+                row.innerHTML = `
+    <div class="text-on-surface whitespace-nowrap">${timeStr}</div>
+    <div class="${sideClass} side-text">${tx.side}</div>
+    <div class="${qtyColorClass} text-right qty-val">${qtySign}${tx.qty}</div>
+    <div class="text-on-surface text-right">${tx.price.toFixed(2)}</div>
+    <div class="${totalColorClass} text-right total-val">${totalSign}${tx.total.toFixed(2)}</div>
+    <button class="btn-delete-row text-outline/50 hover:text-error transition-colors flex items-center justify-center">
+        <span class="material-symbols-outlined text-[16px]">close</span>
+    </button>
+`;
+                tbody.appendChild(row);
+            });
+
+            // 根据交易记录数量和持仓数量切换底部显示
+            const hasHistory = stockData.history && stockData.history.length > 0;
+            const actionsDiv = card.querySelector('.card-actions');
+            const deleteDiv = card.querySelector('.card-delete-action');
+            const settleDiv = card.querySelector('.card-settle-action');
+
+            if (!hasHistory) {
+                // 无任何交易记录 → 显示删除卡片按钮，隐藏其他
+                actionsDiv.classList.add('hidden');
+                deleteDiv.classList.remove('hidden');
+                settleDiv.classList.add('hidden');
+            } else if (totalQty === 0) {
+                // 有记录但持仓为0 → 显示买入/卖出 + 平仓结算
+                actionsDiv.classList.remove('hidden');
+                deleteDiv.classList.add('hidden');
+                settleDiv.classList.remove('hidden');
+            } else {
+                // 正常持仓 → 只显示买入/卖出
+                actionsDiv.classList.remove('hidden');
+                deleteDiv.classList.add('hidden');
+                settleDiv.classList.add('hidden');
+            }
+            return card;
+        }
+        // 更新现有卡片（新增一条交易记录后）
+        function updateCardAfterTransaction(cardId, newTx) {
+            const targetCard = document.querySelector(`.bg-surface-container[data-stock-id="${cardId}"]`);
+            if (!targetCard) {
+                console.warn(`未找到卡片 ${cardId}，将重新加载数据`);
+                loadStocks();
+                return;
+            }
+
+            // 添加新交易记录行
+            const tbody = targetCard.querySelector('.transaction-rows');
+            const row = document.createElement('div');
+            row.className = 'px-density-comfy py-density-high grid grid-cols-[1.4fr_0.8fr_1fr_1fr_1.2fr_24px] gap-unit font-data-mono text-data-mono hover:bg-surface-container-highest transition-colors items-center transaction-row odd:bg-transparent even:bg-white/5';
+            row.dataset.transactionId = newTx.id;
+
+            const sideClass = newTx.side === '买入' ? 'text-secondary' : 'text-error';
+            const isBuyNew = newTx.side === '买入';
+            const qtyColorClassNew = isBuyNew ? 'text-secondary' : 'text-error';
+            const totalColorClassNew = isBuyNew ? 'text-secondary' : 'text-error';
+            const qtySignNew = isBuyNew ? '+' : '-';
+            const totalSignNew = isBuyNew ? '+' : '-';
+
+            row.innerHTML = `
+    <div class="text-on-surface whitespace-nowrap">${newTx.time}</div>
+    <div class="${sideClass} side-text">${newTx.side}</div>
+    <div class="${qtyColorClassNew} text-right qty-val">${qtySignNew}${newTx.qty}</div>
+    <div class="text-on-surface text-right">${newTx.price.toFixed(2)}</div>
+    <div class="${totalColorClassNew} text-right total-val">${totalSignNew}${newTx.total.toFixed(2)}</div>
+    <button class="btn-delete-row text-outline/50 hover:text-error transition-colors flex items-center justify-center">
+        <span class="material-symbols-outlined text-[16px]">close</span>
+    </button>
+`;
+
+            if (tbody.firstChild) {
+                tbody.insertBefore(row, tbody.firstChild);
+            } else {
+                tbody.appendChild(row);
+            }
+
+            // 重新计算并更新卡片头部数据
+            const rows = targetCard.querySelectorAll('.transaction-row');
+            let tQty = 0, tInvest = 0;
+            rows.forEach(r => {
+                const q = parseFloat(r.querySelector('.qty-val').textContent) || 0;
+                const a = parseFloat(r.querySelector('.total-val').textContent) || 0;
+                tQty += q;
+                tInvest += a;
+            });
+
+            const avg = tQty !== 0 ? tInvest / tQty : 0;
+            const priceEl = targetCard.querySelector('.card-price');
+            const qtyEl = targetCard.querySelector('.card-qty');
+            const totalEl = targetCard.querySelector('.card-total');
+
+            priceEl.classList.remove('text-[#22c55e]', 'text-[#ef4444]', 'text-on-surface');
+            qtyEl.classList.remove('text-[#22c55e]', 'text-[#ef4444]', 'text-on-surface');
+            totalEl.classList.remove('text-[#22c55e]', 'text-[#ef4444]', 'text-on-surface');
+
+            if (tQty > 0) {
+                priceEl.classList.add('text-[#22c55e]'); qtyEl.classList.add('text-[#22c55e]'); totalEl.classList.add('text-[#22c55e]');
+                priceEl.textContent = `$${avg.toFixed(2)}`;
+            } else if (tQty < 0) {
+                priceEl.classList.add('text-[#ef4444]'); qtyEl.classList.add('text-[#ef4444]'); totalEl.classList.add('text-[#ef4444]');
+                priceEl.textContent = `-$${Math.abs(avg).toFixed(2)}`;
+            } else {
+                priceEl.classList.add('text-on-surface'); qtyEl.classList.add('text-on-surface'); totalEl.classList.add('text-on-surface');
+                priceEl.textContent = `$${avg.toFixed(2)}`;
+            }
+            qtyEl.textContent = tQty;
+            totalEl.textContent = `$${tInvest.toFixed(2)}`;
+
+            // 更新底部按钮状态
+            const hasHistory = rows.length > 0;
+            const actionsDiv = targetCard.querySelector('.card-actions');
+            const deleteDiv = targetCard.querySelector('.card-delete-action');
+            const settleDiv = targetCard.querySelector('.card-settle-action');
+
+            actionsDiv.classList.add('hidden');
+            deleteDiv.classList.add('hidden');
+            settleDiv.classList.add('hidden');
+            if (!hasHistory) {
+                deleteDiv.classList.remove('hidden');
+            } else if (tQty === 0) {
+                actionsDiv.classList.remove('hidden');
+                settleDiv.classList.remove('hidden');
+            } else {
+                actionsDiv.classList.remove('hidden');
+            }
+        }
+
+        async function loadHistory() {
+            const tbody = document.getElementById('history-table-body');
+            if (!tbody) return;
+
+            try {
+                const res = await fetch(`${API_BASE_URL}/api/history`);
+                allHistoryData = await res.json();
+                currentHistoryPage = 1;
+                renderHistoryPage();
+            } catch (err) {
+                console.error('加载历史失败', err);
+            }
+        }
+        async function openHistoryDetailModal(triggerElement, recordId) {
+            const modal = document.getElementById('modal-history-detail');
+            if (!modal) return;
+
+            try {
+                // 请求卡片完整数据
+                const res = await fetch(`${API_BASE_URL}/api/card/${recordId}`);
+                if (!res.ok) throw new Error('数据加载失败');
+                const card = await res.json();
+
+                // 填充头部
+                document.getElementById('detail-symbol').textContent = card.symbol;
+                const pnlEl = document.getElementById('detail-pnl-value');
+                // 重新计算盈亏
+                let buyTotal = 0, sellTotal = 0;
+                card.history.forEach(tx => {
+                    if (tx.side === '买入') buyTotal += tx.total;
+                    else sellTotal += tx.total;
+                });
+                const pnl = sellTotal - buyTotal;
+                const isProfit = pnl >= 0;
+                pnlEl.classList.remove('text-[#22C55E]', 'text-[#EF4444]');
+                pnlEl.classList.add(isProfit ? 'text-[#22C55E]' : 'text-[#EF4444]');
+                pnlEl.textContent = `${isProfit ? '+' : '-'}$${Math.abs(pnl).toFixed(2)}`;
+
+                // 渲染交易明细（时间倒序）
+                const tbody = document.getElementById('detail-tbody');
+                tbody.innerHTML = '';
+                const sortedHistory = [...card.history].sort((a, b) => new Date(b.time) - new Date(a.time));
+                sortedHistory.forEach(tx => {
+                    const tr = document.createElement('tr');
+                    tr.className = 'hover:bg-[#1C222D] transition-colors group even:bg-[#0B0E14]';
+                    const txDate = new Date(tx.time);
+                    const dateStr = `${txDate.getFullYear()}/${String(txDate.getMonth() + 1).padStart(2, '0')}/${String(txDate.getDate()).padStart(2, '0')} ${String(txDate.getHours()).padStart(2, '0')}:${String(txDate.getMinutes()).padStart(2, '0')}:${String(txDate.getSeconds()).padStart(2, '0')}`;
+                    const sideLabel = tx.side === '买入' ? 'BUY' : 'SELL';
+                    const sideColor = tx.side === '买入' ? '#22C55E' : '#EF4444';
+                    const isBuyDetail = tx.side === '买入';
+                    const detailQtySign = isBuyDetail ? '+' : '-';
+                    const detailTotalSign = isBuyDetail ? '+' : '-';
+                    const detailQtyColor = isBuyDetail ? 'text-[#22C55E]' : 'text-[#EF4444]';
+                    const detailTotalColor = isBuyDetail ? 'text-[#22C55E]' : 'text-[#EF4444]';
+
+                    tr.innerHTML = `
+    <td class="px-6 py-4 whitespace-nowrap text-[#94A3B8]">${dateStr}</td>
+    <td class="px-6 py-4 text-center">
+        <span class="px-2 py-0.5 bg-[${sideColor}]/10 text-[${sideColor}] text-[10px] rounded font-bold border border-[${sideColor}]/20">${sideLabel}</span>
+    </td>
+    <td class="px-6 py-4 text-right ${detailQtyColor}">${detailQtySign}${tx.qty}</td>
+    <td class="px-6 py-4 text-right text-white">${tx.price.toFixed(2)}</td>
+    <td class="px-6 py-4 text-right font-bold ${detailTotalColor}">${detailTotalSign}$${tx.total.toFixed(2)}</td>
+`;
+                    tbody.appendChild(tr);
+                });
+
+                // 动画显示弹窗（与删除弹窗动画一致）
+                openDeleteModalWithAnimation(triggerElement, modal);
+            } catch (error) {
+                alert('加载明细失败: ' + error.message);
+            }
+        }
+        function renderHistoryPage() {
+            const tbody = document.getElementById('history-table-body');
+            const infoSpan = document.getElementById('pagination-info');
+            const prevBtn = document.getElementById('prev-page-btn');
+            const nextBtn = document.getElementById('next-page-btn');
+            const pageIndicator = document.getElementById('page-indicator');
+
+            if (!tbody) return;
+
+            const totalRecords = allHistoryData.length;
+            const totalPages = Math.ceil(totalRecords / historyPageSize) || 0;
+            if (currentHistoryPage > totalPages) currentHistoryPage = totalPages;
+            if (currentHistoryPage < 1) currentHistoryPage = 1;
+
+            const start = (currentHistoryPage - 1) * historyPageSize;
+            const end = start + historyPageSize;
+            const pageData = allHistoryData.slice(start, end);
+
+            // 清空并渲染数据行 + 空白填充行
+            tbody.innerHTML = '';
+            for (let i = 0; i < historyPageSize; i++) {
+                const tr = document.createElement('tr');
+                tr.className = 'hover:bg-surface-container-high transition-colors group odd:bg-transparent even:bg-white/5';
+
+                if (i < pageData.length) {
+                    const record = pageData[i];
+                    tr.dataset.recordId = record._id;
+                    const settleDate = new Date(record.settleTime);
+                    const dateStr = `${settleDate.getFullYear()}/${String(settleDate.getMonth() + 1).padStart(2, '0')}/${String(settleDate.getDate()).padStart(2, '0')}`;
+                    const pnlClass = record.pnl >= 0 ? 'text-secondary' : 'text-error';
+                    const pnlSign = record.pnl >= 0 ? '+' : '-';
+                    // 直接显示完整 ID
+                    const fullId = record._id;
+
+                    tr.innerHTML = `
+                <td class="px-6 py-4 font-data-mono text-on-surface text-center">${dateStr}</td>
+                <td class="px-6 py-4 font-data-mono text-on-surface-variant text-center">${fullId}</td>
+                <td class="px-6 py-4 font-bold text-on-surface text-center">${record.symbol}</td>
+                <td class="px-6 py-4 font-data-mono ${pnlClass} text-right">${pnlSign} $${Math.abs(record.pnl).toFixed(2)}</td>
+                <td class="px-6 py-4 text-right">
+                    <button class="btn-delete-history text-outline hover:text-error transition-all p-1 hover:bg-error-container/10 rounded" data-id="${record._id}">
+                        <span class="material-symbols-outlined text-[20px]">delete</span>
+                    </button>
+                </td>
+            `;
+                } else {
+                    // 空白行：保持相同高度
+                    tr.innerHTML = `
+                <td class="px-6 py-4">&nbsp;</td>
+                <td class="px-6 py-4">&nbsp;</td>
+                <td class="px-6 py-4">&nbsp;</td>
+                <td class="px-6 py-4">&nbsp;</td>
+                <td class="px-6 py-4">&nbsp;</td>
+            `;
+                }
+                tbody.appendChild(tr);
+            }
+
+            // 更新分页信息
+            const displayStart = totalRecords > 0 ? start + 1 : 0;
+            const displayEnd = Math.min(end, totalRecords);
+            infoSpan.textContent = `显示 ${totalRecords} 条记录中的 ${displayStart}-${displayEnd} 条`;
+            pageIndicator.textContent = `第 ${currentHistoryPage} / ${totalPages} 页`;
+
+            prevBtn.disabled = currentHistoryPage <= 1;
+            nextBtn.disabled = currentHistoryPage >= totalPages;
+        }
+        document.getElementById('prev-page-btn')?.addEventListener('click', () => {
+            if (currentHistoryPage > 1) {
+                currentHistoryPage--;
+                renderHistoryPage();
+            }
+        });
+
+        document.getElementById('next-page-btn')?.addEventListener('click', () => {
+            const totalPages = Math.ceil(allHistoryData.length / historyPageSize) || 0;
+            if (currentHistoryPage < totalPages) {
+                currentHistoryPage++;
+                renderHistoryPage();
+            }
+        });
+
+        // 删除历史记录（改用确认弹窗，使用专用对象存储）
+        document.addEventListener('click', async (e) => {
+            const delBtn = e.target.closest('.btn-delete-history');
+            if (delBtn) {
+                // 防止快速重复触发
+                if (historyDeleting) return;
+                const id = delBtn.dataset.id;
+                const record = allHistoryData.find(r => r._id === id);
+                if (!record) return;
+
+                // 存储待删除的行元素
+                window._historyRowToDelete = delBtn.closest('tr');
+                showDeleteHistoryConfirmModal(record, delBtn);
+            }
+        });
+
+        // 获取并渲染所有数据
+        async function loadStocks() {
+            try {
+                const response = await fetch(API_URL);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const stocks = await response.json();
+
+                // 清空容器，移除加载占位符
+                cardsContainer.innerHTML = '';
+
+                if (stocks.length === 0) {
+                    cardsContainer.innerHTML = '<div class="w-full text-center py-12 text-on-surface-variant">暂无持仓数据</div>';
+                    return;
+                }
+
+                // 渲染每张卡片
+                stocks.forEach(stock => {
+                    cardsContainer.appendChild(renderCard(stock));
+                });
+
+            } catch (error) {
+                console.error('加载数据失败:', error);
+                cardsContainer.innerHTML = `
+            <div class="w-full text-center py-12 text-error">
+                <span class="material-symbols-outlined align-middle mr-2">error</span>
+                数据加载失败，请检查网络或API服务
+            </div>
+        `;
+            }
+        }
+
+        // 页面加载时立即执行
+        loadStocks();
+        // ---------- FAB 按钮：打开录入新交易弹窗 ----------
+        const fabButton = document.querySelector('button[aria-label="录入新交易"]');
+        const newTradeModal = document.getElementById('modal-new-transaction');
+        const tradeSymbolInput = document.getElementById('trade-symbol');
+        const tradeSideToggle = document.getElementById('trade-side-toggle');
+        const tradeBuyToggleBtn = tradeSideToggle?.querySelector('[data-side="buy"]');
+        const tradeSellToggleBtn = tradeSideToggle?.querySelector('[data-side="sell"]');
+        const tradeConfirmBtn = document.getElementById('confirm-new-trade');
+        const tradeQtyInput = document.getElementById('trade-qty');
+        const tradePriceInput = document.getElementById('trade-price');
+        const closeModalBtn = document.getElementById('close-new-trade-modal');
+        const cancelModalBtn = document.getElementById('cancel-new-trade');
+        let currentTradeSide = 'buy';
+
+        function setTradeSymbolEditable(symbol, readOnly) {
+            if (!tradeSymbolInput) return;
+
+            if (typeof symbol === 'string') {
+                tradeSymbolInput.value = symbol;
+            }
+
+            if (readOnly) {
+                tradeSymbolInput.setAttribute('readonly', true);
+                tradeSymbolInput.classList.add('bg-[#1e293b]', 'cursor-default');
+            } else {
+                tradeSymbolInput.removeAttribute('readonly');
+                tradeSymbolInput.classList.remove('bg-[#1e293b]', 'cursor-default');
+            }
+        }
+
+        function setTradeModalSide(side) {
+            const isBuy = side === 'buy';
+            currentTradeSide = isBuy ? 'buy' : 'sell';
+
+            tradeBuyToggleBtn?.classList.remove('bg-[#22C55E]', 'text-white', 'bg-[#EF4444]');
+            tradeSellToggleBtn?.classList.remove('bg-[#22C55E]', 'text-white', 'bg-[#EF4444]');
+            tradeBuyToggleBtn?.classList.add('bg-transparent', 'text-on-surface-variant');
+            tradeSellToggleBtn?.classList.add('bg-transparent', 'text-on-surface-variant');
+
+            if (isBuy) {
+                tradeBuyToggleBtn?.classList.remove('bg-transparent', 'text-on-surface-variant');
+                tradeBuyToggleBtn?.classList.add('bg-[#22C55E]', 'text-white');
+                tradeConfirmBtn?.classList.remove('bg-[#EF4444]');
+                tradeConfirmBtn?.classList.add('bg-[#22C55E]');
+                tradeQtyInput?.classList.remove('focus:border-[#EF4444]', 'focus:ring-[#EF4444]');
+                tradePriceInput?.classList.remove('focus:border-[#EF4444]', 'focus:ring-[#EF4444]');
+                tradeQtyInput?.classList.add('focus:border-[#22C55E]', 'focus:ring-[#22C55E]');
+                tradePriceInput?.classList.add('focus:border-[#22C55E]', 'focus:ring-[#22C55E]');
+            } else {
+                tradeSellToggleBtn?.classList.remove('bg-transparent', 'text-on-surface-variant');
+                tradeSellToggleBtn?.classList.add('bg-[#EF4444]', 'text-white');
+                tradeConfirmBtn?.classList.remove('bg-[#22C55E]');
+                tradeConfirmBtn?.classList.add('bg-[#EF4444]');
+                tradeQtyInput?.classList.remove('focus:border-[#22C55E]', 'focus:ring-[#22C55E]');
+                tradePriceInput?.classList.remove('focus:border-[#22C55E]', 'focus:ring-[#22C55E]');
+                tradeQtyInput?.classList.add('focus:border-[#EF4444]', 'focus:ring-[#EF4444]');
+                tradePriceInput?.classList.add('focus:border-[#EF4444]', 'focus:ring-[#EF4444]');
+            }
+        }
+
+        function setBodyScrollLock(isLocked) {
+            document.documentElement.style.overflow = isLocked ? 'hidden' : '';
+            document.body.style.overflow = isLocked ? 'hidden' : '';
+        }
+
+        if (fabButton && newTradeModal) {
+            fabButton.addEventListener('click', () => {
+                currentCardId = null; // FAB录入不关联卡片
+                setTradeSymbolEditable(tradeSymbolInput?.value, false);
+                openModalWithAnimation(fabButton, newTradeModal);
+            });
+        }
+
+
+        // ---------- 弹窗动画：从点击点弹性展开 (macOS 风格) ----------
+        function openModalWithAnimation(triggerElement, modal) {
+            if (!modal || !triggerElement) return;
+
+            // 获取触发按钮的中心坐标
+            const rect = triggerElement.getBoundingClientRect();
+            const centerX = rect.left + rect.width / 2;
+            const centerY = rect.top + rect.height / 2;
+
+            // 计算相对于视口中心的偏移量（弹窗默认居中）
+            const viewportCenterX = window.innerWidth / 2;
+            const viewportCenterY = window.innerHeight / 2;
+            const offsetX = centerX - viewportCenterX;
+            const offsetY = centerY - viewportCenterY;
+
+            // 获取弹窗内容容器
+            const contentDiv = modal.querySelector('.bg-\\[\\#1C222D\\]');
+            if (!contentDiv) return;
+
+            // 设置初始状态：移动到触发点并缩小为0
+            contentDiv.style.transition = 'none'; // 暂时禁用过渡，避免初始跳变
+            contentDiv.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(0)`;
+            contentDiv.style.opacity = '0';
+
+            // 显示弹窗（移除 hidden 类）
+            modal.classList.remove('hidden');
+            setBodyScrollLock(true);
+
+            // 强制重绘后，应用带弹性曲线的过渡
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                    // 恢复过渡，使用弹性缓动函数 (macOS 风格弹性效果)
+                    contentDiv.style.transition = 'transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.25s ease-out';
+                    contentDiv.style.transform = '';
+                    contentDiv.style.opacity = '';
+                });
+            });
+        }
+        // ---------- 删除弹窗动画：从点击点弹性展开 ----------
+        function openDeleteModalWithAnimation(triggerElement, modal) {
+            if (!modal || !triggerElement) return;
+
+            // 获取触发按钮的中心坐标
+            const rect = triggerElement.getBoundingClientRect();
+            const centerX = rect.left + rect.width / 2;
+            const centerY = rect.top + rect.height / 2;
+
+            // 计算相对于视口中心的偏移量
+            const viewportCenterX = window.innerWidth / 2;
+            const viewportCenterY = window.innerHeight / 2;
+            const offsetX = centerX - viewportCenterX;
+            const offsetY = centerY - viewportCenterY;
+
+            // 获取弹窗内容容器
+            const contentDiv = modal.querySelector('.bg-\\[\\#1C222D\\]');
+            if (!contentDiv) return;
+
+            // 设置初始状态
+            contentDiv.style.transition = 'none';
+            contentDiv.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(0)`;
+            contentDiv.style.opacity = '0';
+
+            // 显示弹窗
+            modal.style.display = 'flex';
+            setBodyScrollLock(true);
+
+            // 触发动画
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                    contentDiv.style.transition = 'transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.25s ease-out';
+                    contentDiv.style.transform = '';
+                    contentDiv.style.opacity = '';
+                });
+            });
+        }
+        // 增强版关闭弹窗：隐藏弹窗并重置股票代码为可编辑状态
+        function enhancedCloseModal() {
+            const modal = document.getElementById('modal-new-transaction');
+            const contentDiv = modal?.querySelector('.bg-\\[\\#1C222D\\]');
+
+            modal?.classList.add('hidden');
+
+            // 清除动画残留样式
+            if (contentDiv) {
+                contentDiv.style.transform = '';
+                contentDiv.style.opacity = '';
+            }
+
+            setBodyScrollLock(false);
+            setTradeSymbolEditable(tradeSymbolInput?.value, false);
+            currentCardId = null;
+        }
+
+        // ---------- 卡片“买入/卖出”按钮：打开弹窗并预设 ----------
+        document.addEventListener('click', (e) => {
+            const buyBtn = e.target.closest('.btn-card-buy');
+            const sellBtn = e.target.closest('.btn-card-sell');
+            if (!buyBtn && !sellBtn) return;
+            const card = buyBtn?.closest('.bg-surface-container') || sellBtn?.closest('.bg-surface-container');
+            if (!card) return;
+            // 保存当前卡片的ID
+            currentCardId = card.dataset.stockId;
+            const symbol = card.querySelector('.card-symbol')?.textContent.trim() || '';
+
+            if (!newTradeModal || !tradeSymbolInput) return;
+
+            // 设置股票代码（只读）
+            setTradeSymbolEditable(symbol, true);
+
+            // 预设买卖方向
+            setTradeModalSide(buyBtn ? 'buy' : 'sell');
+
+            // 显示弹窗（带动画）
+            const trigger = buyBtn || sellBtn;
+            openModalWithAnimation(trigger, newTradeModal);
+
+        });
+        // ---------- 录入弹窗增强交互 (v1.0.6) 完整修正版 ----------
+        (function initTradeModal() {
+            const estimateDiv = document.getElementById('trade-estimate');
+
+            if (!newTradeModal) return;
+
+            // ----- 1. 股票代码自动转大写 -----
+            if (tradeSymbolInput) {
+                tradeSymbolInput.addEventListener('blur', function () {
+                    this.value = this.value.toUpperCase();
+                });
+                tradeSymbolInput.addEventListener('input', function () {
+                    this.value = this.value.toUpperCase();
+                });
+            }
+
+            // ----- 2. 计算并更新估算成交额 -----
+            function updateEstimate() {
+                if (!tradeQtyInput || !tradePriceInput || !estimateDiv) return;
+                const qty = parseFloat(tradeQtyInput.value) || 0;
+                const price = parseFloat(tradePriceInput.value) || 0;
+                const total = qty * price;
+                estimateDiv.textContent = total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            }
+            tradeQtyInput?.addEventListener('input', updateEstimate);
+            tradePriceInput?.addEventListener('input', updateEstimate);
+            updateEstimate();
+
+            // ----- 3. 快捷数量按钮 -----
+            document.querySelectorAll('#qty-presets button').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const qty = btn.getAttribute('data-qty');
+                    if (tradeQtyInput) {
+                        tradeQtyInput.value = qty;
+                        updateEstimate();
+                    }
+                });
+            });
+
+            // ----- 4. 买卖切换：互斥激活样式 + 确认按钮颜色联动 -----
+            tradeBuyToggleBtn?.addEventListener('click', () => setTradeModalSide('buy'));
+            tradeSellToggleBtn?.addEventListener('click', () => setTradeModalSide('sell'));
+            closeModalBtn?.addEventListener('click', enhancedCloseModal);
+            cancelModalBtn?.addEventListener('click', enhancedCloseModal);
+            setTradeModalSide('buy'); // 默认激活买入
+
+            // ----- 5. 确认保存：调用后端API并更新前端UI -----
+            tradeConfirmBtn?.addEventListener('click', async () => {
+                // ... 获取 side, symbol, qty, price ...
+
+                const side = currentTradeSide === 'buy' ? '买入' : '卖出';
+
+                const symbol = tradeSymbolInput?.value.toUpperCase().trim() || '';
+                const qty = parseFloat(tradeQtyInput?.value) || 0;
+                const price = parseFloat(tradePriceInput?.value) || 0;
+
+                if (!symbol) { alert('请输入股票代码'); return; }
+                if (qty <= 0) { alert('成交数量必须大于0'); return; }
+                if (price <= 0) { alert('成交价格必须大于0'); return; }
+
+                const requestBody = { symbol, side, qty, price };
+                if (currentCardId) {
+                    requestBody.cardId = currentCardId;
+                }
+                tradeConfirmBtn.disabled = true;
+                tradeConfirmBtn.textContent = '保存中...';
+
+                try {
+                    const response = await fetch(`${API_BASE_URL}/api/add-transaction`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(requestBody)
+                    });
+
+                    if (!response.ok) {
+                        const errData = await response.json();
+                        throw new Error(errData.message || '请求失败');
+                    }
+
+                    const result = await response.json();
+                    console.log('交易保存成功:', result);
+
+                    if (result.isNewCard) {
+                        await loadStocks();
+                    } else {
+                        updateCardAfterTransaction(result.cardId, result.data);
+                    }
+
+                    enhancedCloseModal();
+                } catch (error) {
+                    console.error('保存交易失败:', error);
+                    alert(`保存失败: ${error.message}`);
+                } finally {
+                    tradeConfirmBtn.disabled = false;
+                    tradeConfirmBtn.textContent = '确认保存';
+                }
+            });
+        })();
+    </script>
+</body>
+
+</html>
